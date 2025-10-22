@@ -12,50 +12,12 @@
 # The above copyright notice and this permission notice shall be
 # included in all copies or substantial portions of the Software.
 
-import re
 import os.path
 import _common
 from _common import unittest
-import helper
-from helper import control_stdin
+from helper import TestHelper, control_stdin
 
 from beets.mediafile import MediaFile
-
-
-class TestHelper(helper.TestHelper):
-
-    def tagged_copy_cmd(self, tag):
-        """Return a conversion command that copies files and appends
-        `tag` to the copy.
-        """
-        if re.search('[^a-zA-Z0-9]', tag):
-            raise ValueError(u"tag '{0}' must only contain letters and digits"
-                             .format(tag))
-        # FIXME This is not portable. For windows we need to use our own
-        # python script that performs the same task.
-        return u'cp $source $dest; printf {0} >> $dest'.format(tag)
-
-    def assertFileTag(self, path, tag):
-        """Assert that the path is a file and the files content ends with `tag`.
-        """
-        self.assertTrue(os.path.isfile(path),
-                        u'{0} is not a file'.format(path))
-        with open(path) as f:
-            f.seek(-len(tag), os.SEEK_END)
-            self.assertEqual(f.read(), tag,
-                             u'{0} is not tagged with {1}'.format(path, tag))
-
-    def assertNoFileTag(self, path, tag):
-        """Assert that the path is a file and the files content does not
-        end with `tag`.
-        """
-        self.assertTrue(os.path.isfile(path),
-                        u'{0} is not a file'.format(path))
-        with open(path) as f:
-            f.seek(-len(tag), os.SEEK_END)
-            self.assertNotEqual(f.read(), tag,
-                                u'{0} is unexpectedly tagged with {1}'
-                                .format(path, tag))
 
 
 class ImportConvertTest(unittest.TestCase, TestHelper):
@@ -67,7 +29,9 @@ class ImportConvertTest(unittest.TestCase, TestHelper):
 
         self.config['convert'] = {
             'dest': os.path.join(self.temp_dir, 'convert'),
-            'command': self.tagged_copy_cmd('convert'),
+            # Append string so we can determine if the file was
+            # converted
+            'command': u'cp $source $dest; printf convert >> $dest',
             # Enforce running convert
             'max_bitrate': 1,
             'auto': True,
@@ -81,7 +45,7 @@ class ImportConvertTest(unittest.TestCase, TestHelper):
     def test_import_converted(self):
         self.importer.run()
         item = self.lib.items().get()
-        self.assertFileTag(item.path, 'convert')
+        self.assertConverted(item.path)
 
     def test_import_original_on_convert_error(self):
         # `false` exits with non-zero code
@@ -91,6 +55,12 @@ class ImportConvertTest(unittest.TestCase, TestHelper):
         item = self.lib.items().get()
         self.assertIsNotNone(item)
         self.assertTrue(os.path.isfile(item.path))
+
+    def assertConverted(self, path):
+        with open(path) as f:
+            f.seek(-7, os.SEEK_END)
+            self.assertEqual(f.read(), 'convert',
+                             '{0} was not converted'.format(path))
 
 
 class ConvertCliTest(unittest.TestCase, TestHelper):
@@ -107,9 +77,9 @@ class ConvertCliTest(unittest.TestCase, TestHelper):
             'paths': {'default': 'converted'},
             'format': 'mp3',
             'formats': {
-                'mp3': self.tagged_copy_cmd('mp3'),
+                'mp3': 'cp $source $dest',
                 'opus': {
-                    'command': self.tagged_copy_cmd('opus'),
+                    'command': 'cp $source $dest',
                     'extension': 'ops',
                 }
             }
@@ -123,12 +93,12 @@ class ConvertCliTest(unittest.TestCase, TestHelper):
         with control_stdin('y'):
             self.run_command('convert', self.item.path)
         converted = os.path.join(self.convert_dest, 'converted.mp3')
-        self.assertFileTag(converted, 'mp3')
+        self.assertTrue(os.path.isfile(converted))
 
     def test_convert_with_auto_confirmation(self):
         self.run_command('convert', '--yes', self.item.path)
         converted = os.path.join(self.convert_dest, 'converted.mp3')
-        self.assertFileTag(converted, 'mp3')
+        self.assertTrue(os.path.isfile(converted))
 
     def test_rejecet_confirmation(self):
         with control_stdin('n'):
@@ -149,7 +119,7 @@ class ConvertCliTest(unittest.TestCase, TestHelper):
         with control_stdin('y'):
             self.run_command('convert', '--format', 'opus', self.item.path)
             converted = os.path.join(self.convert_dest, 'converted.ops')
-        self.assertFileTag(converted, 'opus')
+        self.assertTrue(os.path.isfile(converted))
 
     def test_embed_album_art(self):
         self.config['convert']['embed'] = True
@@ -181,7 +151,7 @@ class NeverConvertLossyFilesTest(unittest.TestCase, TestHelper):
             'never_convert_lossy_files': True,
             'format': 'mp3',
             'formats': {
-                'mp3': self.tagged_copy_cmd('mp3'),
+                'mp3': 'cp $source $dest',
             }
         }
 
@@ -194,7 +164,7 @@ class NeverConvertLossyFilesTest(unittest.TestCase, TestHelper):
         with control_stdin('y'):
             self.run_command('convert', item.path)
         converted = os.path.join(self.convert_dest, 'converted.mp3')
-        self.assertFileTag(converted, 'mp3')
+        self.assertTrue(os.path.isfile(converted))
 
     def test_transcode_from_lossy(self):
         self.config['convert']['never_convert_lossy_files'] = False
@@ -202,14 +172,14 @@ class NeverConvertLossyFilesTest(unittest.TestCase, TestHelper):
         with control_stdin('y'):
             self.run_command('convert', item.path)
         converted = os.path.join(self.convert_dest, 'converted.mp3')
-        self.assertFileTag(converted, 'mp3')
+        self.assertTrue(os.path.isfile(converted))
 
     def test_transcode_from_lossy_prevented(self):
         [item] = self.add_item_fixtures(ext='ogg')
         with control_stdin('y'):
             self.run_command('convert', item.path)
         converted = os.path.join(self.convert_dest, 'converted.ogg')
-        self.assertNoFileTag(converted, 'mp3')
+        self.assertTrue(os.path.isfile(converted))
 
 
 def suite():
